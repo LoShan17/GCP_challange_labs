@@ -1,0 +1,122 @@
+
+# config your env (zone and region provided by Lab)
+gcloud config set compute/region us-central1
+gcloud config set compute/zone us-central1-c
+
+# set region as env variable
+export ZONE=$(gcloud config get-value compute/zone)
+export REGION=$(gcloud config get-value compute/region)
+export JUMPHOST="nucleus-jumphost-586"
+
+####################################
+# Create a project jumphost instance
+####################################
+
+gcloud compute instances create $JUMPHOST --machine-type e2-micro --zone $ZONE
+
+
+#####################################
+# Create a Kubernetes service cluster
+#####################################
+
+gcloud container clusters create --machine-type=e2-micro --zone=$ZONE lab-cluster
+gcloud container clusters get-credentials lab-cluster
+
+kubectl create deployment hello-app --image=gcr.io/google-samples/hello-app:2.0
+kubectl expose deployment hello-app --type=LoadBalancer --port 8080
+kubectl get service
+
+# and to test, this may take some time to expose the IP
+# http://[EXTERNAL-IP]:8080
+
+##############################
+# Set up an HTTP load balancer
+##############################
+
+# as per lab instructions:
+
+cat << EOF > startup.sh
+#! /bin/bash
+apt-get update
+apt-get install -y nginx
+service nginx start
+sed -i — ‘s/nginx/Google Cloud Platform — ‘“\$HOSTNAME”’/’ /var/www/html/index.nginx-debian.html
+EOF
+
+# Creating an instance template:
+gcloud compute instance-templates create nginx-template --metadata-from-file startup-script=startup.sh
+
+# Creating a target pool
+gcloud compute target-pools create nginx-pool  (press n if asked)
+
+# Creating a managed instance group:
+gcloud compute instance-groups managed create nginx-group \
+ --base-instance-name nginx \
+ --size 2 \
+ --template nginx-template \
+ --target-pool nginx-pool 
+gcloud compute instances list
+
+# Creating a firewall rule to allow traffic (80/tcp):
+# gcloud compute firewall-rules create www-firewall --allow tcp:80
+gcloud compute firewall-rules create allow-tcp-rule-533 --allow tcp:80 (attention, firewall name is provided in lab!)
+gcloud compute forwarding-rules create nginx-lb \
+--region $REGION \
+--ports=80 \
+--target-pool nginx-pool
+gcloud compute forwarding-rules list
+
+# Creating a health check:
+gcloud compute http-health-checks create http-basic-check
+gcloud compute instance-groups managed set-named-ports nginx-group --named-ports http:80
+
+# Creating a backend service and attach the managed instance group:
+gcloud compute backend-services create nginx-backend \
+--protocol HTTP --http-health-checks http-basic-check --global
+
+gcloud compute backend-services add-backend nginx-backend \
+  --instance-group=nginx-group \
+  --instance-group-zone=$ZONE \
+  --global
+
+gcloud compute url-maps create web-map --default-service nginx-backend
+
+gcloud compute target-http-proxies create http-lb-proxy --url-map web-map
+
+gcloud compute forwarding-rules create http-content-rule \
+--global \
+--target-http-proxy http-lb-proxy \
+--ports 80
+
+gcloud compute forwarding-rules list
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
